@@ -1,4 +1,4 @@
-led / optimized / DLL files
+compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 */.py[cod]
@@ -21,6 +21,9 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Editor
+*~
 
 # PyInstaller
 #  Usually these files are written by a python script from a template 
@@ -54,16 +57,13 @@ docs/_build/
 target/*
 
 # VMBackup package ignors
-VMBackup/Utils
-VMBackup/Utils/*
 VMBackup/dist
 VMBackup/dist/*
 VMBackup/azure-sdk
 VMBackup/azure-sdk/*
 VMBackup/main/azure/*
-VMBackup/main/Utils/*
 VMBackup/MANIFEST
-VMBackup/*.pyproj
+#VMBackup/*.pyproj
 VMBackup/*.pyproj.user
 VMBackup/*.suo
 
@@ -74,4 +74,28 @@ CustomScript/test/download/0/errout
 
 # VMEncryption ignores
 VMEncryption/main/azure/*
-VMEncryption/main/Utils/*
+
+# Common
+Common/psutil/build/*
+Common/psutil/dist/*
+Common/psutil/psutil.egg-info/*
+VMBackup/.vs/VMBackup/v14/.suo
+RDMAUpdate/RDMAUpdate.pyproj.user
+*.sln
+RDMAUpdate/VMBackup.pyproj.user
+VMBackup/.vs/config/applicationhost.config
+RDMAUpdate/.vs/VMBackup/v14/.suo
+
+# Handler Registration ignores
+*.pem
+RDMAUpdate/.vs/RDMAUpdate/v14/.suo
+
+# Visual Studio directory
+.vs/
+
+# Ignore HandlerManifest updates
+VMEncryption/HandlerManifest.json
+VMEncryption/AzureDiskEncryptionForLinux*.xml
+VMEncryption/ADEForLinux*.xml
+VMEncryption/MANIFEST
+

@@ -1,0 +1,14 @@
+[
+  {
+    "version": 1.0,
+    "handlerManifest": {
+      "disableCommand": "main/handle.py -disable",
+      "enableCommand": "main/handle.py -enable",
+      "installCommand": "main/handle.py -install",
+      "uninstallCommand": "main/handle.py -uninstall",
+      "updateCommand": "main/handle.py -update",
+      "rebootAfterInstall": false,
+      "reportHeartbeat": false
+    }
+  }
+]

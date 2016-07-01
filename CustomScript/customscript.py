@@ -16,47 +16,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Requires Python 2.6+
-#
-
-
-import array
-import base64
 import os
 import os.path
 import re
-import string
+import shutil
 import subprocess
 import sys
-import imp
-import shlex
+import time
 import traceback
 import urllib2
 import urlparse
-import time
-import shutil
-import tempfile
-import json
-from codecs import *
-from azure.storage import BlobService
-from Utils.WAAgentUtil import waagent
-import Utils.HandlerUtil as Util
 
+from azure.storage import BlobService
+from codecs import *
+from distutils.util import strtobool
+from Utils.WAAgentUtil import waagent
+
+import Utils.HandlerUtil as Util
+import Utils.ScriptUtil as ScriptUtil
+
+ExtensionShortName = 'CustomScriptForLinux'
 
 # Global Variables
-mfile = os.path.join(os.getcwd(), 'HandlerManifest.json')
-with open(mfile,'r') as f:
-    manifest = json.loads(f.read())[0]
-    ExtensionShortName = manifest['name']
-    Version = manifest['version']
 DownloadDirectory = 'download'
-StdoutFile = "stdout"
-ErroutFile = "errout"
-OutputSize = 4 * 1024
+
 # CustomScript-specific Operation
 DownloadOp = "Download"
 RunScriptOp = "RunScript"
 
+# Change permission of log path
+ext_log_path = '/var/log/azure/'
+if os.path.exists(ext_log_path):
+    os.chmod('/var/log/azure/', 0o700)
 
 #Main function is the only entrence to this extension handler
 def main():
@@ -80,11 +71,12 @@ def main():
                 daemon(hutil)
             elif re.match("^([-/]*)(update)", a):
                 dummy_command("Update", "success", "Update succeeded")
-    except Exception, e:
-        hutil.error(("Failed to enable the extension with error: {0}, "
-                     "{1}").format(e, traceback.format_exc()))
+    except Exception as e:
+        err_msg = "Failed with error: {0}, {1}".format(e, traceback.format_exc())
+        waagent.Error(err_msg)
+        hutil.error(err_msg)
         hutil.do_exit(1, 'Enable','failed','0',
-                      'Enable failed: {0}'.format(e))
+                      'Enable failed: {0}'.format(err_msg))
 
 
 def dummy_command(operation, status, msg):
@@ -103,42 +95,87 @@ def enable(hutil):
     Ensure the same configuration is executed only once
     If the previous enable failed, we do not have retry logic here,
     since the custom script may not work in an intermediate state.
-    But if download_files fails, we will retry it for maxRetry times.
     """
     hutil.exit_if_enabled()
-    prepare_download_dir(hutil.get_seq_no())
-    maxRetry = 2
-    for retry in range(0, maxRetry + 1):
+
+    start_daemon(hutil)
+
+
+def download_files_with_retry(hutil, retry_count, wait):
+    hutil.log(("Will try to download files, "
+               "number of retries = {0}, "
+               "wait SECONDS between retrievals = {1}s").format(retry_count, wait))
+    for download_retry_count in range(0, retry_count + 1):
         try:
             download_files(hutil)
             break
-        except Exception, e:
-            hutil.error(("Failed to download files, "
-                         "retry={0}, maxRetry={1}").format(retry, maxRetry))
-            if retry != maxRetry:
-                hutil.log("Sleep 10 seconds")
-                time.sleep(10)
+        except Exception as e:
+            error_msg = "{0}, retry = {1}, maxRetry = {2}.".format(e, download_retry_count, retry_count)
+            hutil.error(error_msg)
+            if download_retry_count < retry_count:
+                hutil.log("Sleep {0} seconds".format(wait))
+                time.sleep(wait)
             else:
-                error_msg = "Failed to download files"
                 waagent.AddExtensionEvent(name=ExtensionShortName,
                                           op=DownloadOp,
                                           isSuccess=False,
-                                          version=Version,
+                                          version=hutil.get_extension_version(),
                                           message="(01100)"+error_msg)
                 raise
+
+    msg = ("Succeeded to download files, "
+           "retry count = {0}").format(download_retry_count)
+    hutil.log(msg)
     waagent.AddExtensionEvent(name=ExtensionShortName,
                               op=DownloadOp,
                               isSuccess=True,
-                              version=Version,
-                              message="(01303)Succeeded to download files")
-    start_daemon(hutil)
+                              version=hutil.get_extension_version(),
+                              message="(01303)"+msg)
+    return retry_count - download_retry_count
+
+
+def check_idns_with_retry(hutil, retry_count, wait):
+    is_idns_ready = False
+    for check_idns_retry_count in range(0, retry_count + 1):
+        is_idns_ready = check_idns()
+        if is_idns_ready:
+            break
+        else:
+            if check_idns_retry_count < retry_count:
+                hutil.error("Internal DNS is not ready, retry to check.")
+                hutil.log("Sleep {0} seconds".format(wait))
+                time.sleep(wait)
+
+    if is_idns_ready:
+        msg = ("Internal DNS is ready, "
+               "retry count = {0}").format(check_idns_retry_count)
+        hutil.log(msg)
+        waagent.AddExtensionEvent(name=ExtensionShortName,
+                                  op="CheckIDNS",
+                                  isSuccess=True,
+                                  version=hutil.get_extension_version(),
+                                  message="(01306)"+msg)
+    else:
+        error_msg = ("Internal DNS is not ready, "
+                     "retry count = {0}, ignore it.").format(check_idns_retry_count)
+        hutil.error(error_msg)
+        waagent.AddExtensionEvent(name=ExtensionShortName,
+                                  op="CheckIDNS",
+                                  isSuccess=False,
+                                  version=hutil.get_extension_version(),
+                                  message="(01306)"+error_msg)
+
+
+def check_idns():
+    ret = waagent.Run("host $(hostname)")
+    return not ret
 
 
 def download_files(hutil):
     public_settings = hutil.get_public_settings()
     if public_settings is None:
         raise ValueError("Public configuration couldn't be None.")
-    cmd = public_settings.get('commandToExecute')
+    cmd = get_command_to_execute(hutil)
     blob_uris = public_settings.get('fileUris')
 
     protected_settings = hutil.get_protected_settings()
@@ -158,7 +195,7 @@ def download_files(hutil):
         waagent.AddExtensionEvent(name=ExtensionShortName,
                                   op=DownloadOp,
                                   isSuccess=False,
-                                  version=Version,
+                                  version=hutil.get_extension_version(),
                                   message="(01001)"+error_msg)
         return
 
@@ -183,16 +220,14 @@ def download_files(hutil):
         waagent.AddExtensionEvent(name=ExtensionShortName,
                                   op=DownloadOp,
                                   isSuccess=False,
-                                  version=Version,
+                                  version=hutil.get_extension_version(),
                                   message="(01000)"+error_msg)
         raise ValueError(error_msg)
 
 
 def start_daemon(hutil):
-    public_settings = hutil.get_public_settings()
-    cmd = public_settings.get('commandToExecute')
+    cmd = get_command_to_execute(hutil)
     if cmd:
-        hutil.log("Command to execute:" + cmd)
         args = [os.path.join(os.getcwd(), __file__), "-daemon"]
 
         # This process will start a new background process by calling
@@ -202,102 +237,56 @@ def start_daemon(hutil):
         # Redirect stdout and stderr to /dev/null. Otherwise daemon process
         # will throw Broke pipe exeception when parent process exit.
         devnull = open(os.devnull, 'w')
-        child = subprocess.Popen(args, stdout=devnull, stderr=devnull)
+        subprocess.Popen(args, stdout=devnull, stderr=devnull)
         hutil.do_exit(0, 'Enable', 'transitioning', '0',
                       'Launching the script...')
     else:
-        error_msg = "CommandToExecute is empty or invalid"
+        error_msg = "commandToExecute is empty or invalid"
         hutil.error(error_msg)
         waagent.AddExtensionEvent(name=ExtensionShortName,
                                   op=RunScriptOp,
                                   isSuccess=False,
-                                  version=Version,
+                                  version=hutil.get_extension_version(),
                                   message="(01002)"+error_msg)
         raise ValueError(error_msg)
 
 
 def daemon(hutil):
+    retry_count = 10
+    wait = 20
+    enable_idns_check = True
+
     public_settings = hutil.get_public_settings()
-    cmd = public_settings.get('commandToExecute')
-    args = parse_args(cmd)
+    if public_settings:
+        if 'retrycount' in public_settings:
+            retry_count = public_settings.get('retrycount')
+        if 'wait' in public_settings:
+            wait = public_settings.get('wait')
+        if 'enableInternalDNSCheck' in public_settings:
+            enable_idns_check = strtobool(public_settings.get('enableInternalDNSCheck'))
+
+    prepare_download_dir(hutil.get_seq_no())
+    retry_count = download_files_with_retry(hutil, retry_count, wait)
+
+    # The internal DNS needs some time to be ready.
+    # Wait and retry to check if there is time in retry window.
+    # The check may be removed safely if iDNS is always ready.
+    if enable_idns_check:
+        check_idns_with_retry(hutil, retry_count, wait)
+
+    cmd = get_command_to_execute(hutil)
+    args = ScriptUtil.parse_args(cmd)
     if args:
-        run_script(hutil, args)
+        ScriptUtil.run_command(hutil, args, prepare_download_dir(hutil.get_seq_no()), 'Daemon', ExtensionShortName, hutil.get_extension_version())
     else:
-        error_msg = "CommandToExecute is empty or invalid."
+        error_msg = "commandToExecute is empty or invalid."
         hutil.error(error_msg)
         waagent.AddExtensionEvent(name=ExtensionShortName,
                                   op=RunScriptOp,
                                   isSuccess=False,
-                                  version=Version,
+                                  version=hutil.get_extension_version(),
                                   message="(01002)"+error_msg)
         raise ValueError(error_msg)
-
-
-def run_script(hutil, args, interval = 30):
-    download_dir = prepare_download_dir(hutil.get_seq_no())
-    std_out_file = os.path.join(download_dir, StdoutFile)
-    err_out_file = os.path.join(download_dir, ErroutFile)
-    std_out = None
-    err_out = None
-    try:
-        std_out = open(std_out_file, "w")
-        err_out = open(err_out_file, "w")
-        start_time = time.time()
-        child = subprocess.Popen(args,
-                                 cwd = download_dir,
-                                 stdout=std_out,
-                                 stderr=err_out)
-        time.sleep(1)
-        while child.poll() == None:
-            msg = get_formatted_log("Script is running...",
-                                    tail(std_out_file), tail(err_out_file))
-            hutil.log(msg)
-            hutil.do_status_report('Enable', 'transitioning', '0', msg)
-            time.sleep(interval)
-
-        if child.returncode and child.returncode != 0:
-            msg = get_formatted_log("Script returned an error.",
-                                    tail(std_out_file), tail(err_out_file))
-            hutil.error(msg)
-            waagent.AddExtensionEvent(name=ExtensionShortName,
-                                      op=RunScriptOp,
-                                      isSuccess=False,
-                                      version=Version,
-                                      message="(01302)"+msg)
-            hutil.do_exit(1, 'Enable', 'failed', '1', msg)
-        else:
-            msg = get_formatted_log("Script is finished.",
-                                    tail(std_out_file), tail(err_out_file))
-            hutil.log(msg)
-            waagent.AddExtensionEvent(name=ExtensionShortName,
-                                      op=RunScriptOp,
-                                      isSuccess=True,
-                                      version=Version,
-                                      message="(01302)"+msg)
-            end_time = time.time()
-            waagent.AddExtensionEvent(name=ExtensionShortName,
-                                      op=RunScriptOp,
-                                      isSuccess=True,
-                                      version=Version,
-                                      message=("(01304)Script executing time: "
-                                      "{0}s").format(str(end_time-start_time)))
-            hutil.do_exit(0, 'Enable', 'success','0', msg)
-    except Exception, e:
-        error_msg = ("Failed to launch script with error: {0},"
-                     "stacktrace: {1}").format(e, traceback.format_exc())
-        hutil.error(error_msg)
-        waagent.AddExtensionEvent(name=ExtensionShortName,
-                                  op=RunScriptOp,
-                                  isSuccess=False,
-                                  version=Version,
-                                  message="(01101)"+error_msg)
-        hutil.do_exit(1, 'Enable', 'failed', '1',
-                      'Lanch script failed: {0}'.format(e))
-    finally:
-        if std_out:
-            std_out.close()
-        if err_out:
-            err_out.close()
 
 
 def download_blobs(storage_account_name, storage_account_key,
@@ -319,23 +308,24 @@ def download_blob(storage_account_name, storage_account_key,
         result = download_and_save_blob(storage_account_name,
                                         storage_account_key,
                                         blob_uri,
-                                        download_dir)
+                                        download_dir,
+                                        hutil)
         blob_name, _, _, download_path = result
         preprocess_files(download_path, hutil)
         if command and blob_name in command:
-            os.chmod(download_path, 0100)
-    except Exception, e:
-        hutil.error(("Failed to download blob with uri: {0} "
-                     "with error {1}").format(blob_uri,e))
-        raise
+            os.chmod(download_path, 0o100)
+    except Exception as e:
+        error_msg = "Failed to download blob with uri: {0} with error {1}".format(blob_uri, e)
+        raise Exception(error_msg)
 
 
 def download_and_save_blob(storage_account_name,
                            storage_account_key,
                            blob_uri,
-                           download_dir):
-    container_name = get_container_name_from_uri(blob_uri)
-    blob_name = get_blob_name_from_uri(blob_uri)
+                           download_dir,
+                           hutil):
+    container_name = get_container_name_from_uri(blob_uri, hutil)
+    blob_name = get_blob_name_from_uri(blob_uri, hutil)
     host_base = get_host_base_from_uri(blob_uri)
     # If blob_name is a path, extract the file_name
     last_sep = blob_name.rfind('/')
@@ -350,7 +340,7 @@ def download_and_save_blob(storage_account_name,
                                storage_account_key,
                                host_base=host_base)
     blob_service.get_blob_to_path(container_name, blob_name, download_path)
-    return (blob_name, container_name, host_base, download_path)
+    return blob_name, container_name, host_base, download_path
 
 
 def download_external_files(uris, command, hutil):
@@ -369,17 +359,16 @@ def download_external_file(uri, command, hutil):
         download_and_save_file(uri, file_path)
         preprocess_files(file_path, hutil)
         if command and file_name in command:
-            os.chmod(file_path, 0100)
-    except Exception, e:
-        hutil.error(("Failed to download external file with uri: {0} "
-                     "with error {1}").format(uri, e))
-        raise
+            os.chmod(file_path, 0o100)
+    except Exception as e:
+        error_msg = ("Failed to download external file with uri: {0} "
+                     "with error {1}").format(uri, e)
+        raise Exception(error_msg)
 
 
-def download_and_save_file(uri, file_path):
-    src = urllib2.urlopen(uri)
+def download_and_save_file(uri, file_path, timeout=30, buf_size=1024):
+    src = urllib2.urlopen(uri, timeout=timeout)
     with open(file_path, 'wb') as dest:
-        buf_size = 1024
         buf = src.read(buf_size)
         while(buf):
             dest.write(buf)
@@ -396,9 +385,9 @@ def preprocess_files(file_path, hutil):
     ret = to_process(file_path)
     if ret:
         dos2unix(file_path)
-        hutil.log("Converting text files from DOS to Unix formats: Done")
+        hutil.log("Converting {0} from DOS to Unix formats: Done".format(file_path))
         remove_bom(file_path)
-        hutil.log("Removing BOM: Done")
+        hutil.log("Removing BOM of {0}: Done".format(file_path))
 
 
 def to_process(file_path, extensions=['.sh', ".py"]):
@@ -415,7 +404,7 @@ def to_process(file_path, extensions=['.sh', ".py"]):
 def dos2unix(file_path):
     with open(file_path, 'rU') as f:
         contents = f.read()
-    temp_file_path = tempfile.mkstemp()[1]
+    temp_file_path = file_path + ".tmp"
     with open(temp_file_path, 'wb') as f_temp:
         f_temp.write(contents)
     shutil.move(temp_file_path, file_path)
@@ -438,18 +427,18 @@ def remove_bom(file_path):
         except UnicodeDecodeError:
             continue
     if new_contents is not None:
-        temp_file_path = tempfile.mkstemp()[1]
+        temp_file_path = file_path + ".tmp"
         with open(temp_file_path, 'wb') as f_temp:
             f_temp.write(new_contents)
         shutil.move(temp_file_path, file_path)
 
 
-def get_blob_name_from_uri(uri):
-    return get_properties_from_uri(uri)['blob_name']
+def get_blob_name_from_uri(uri, hutil):
+    return get_properties_from_uri(uri, hutil)['blob_name']
 
 
-def get_container_name_from_uri(uri):
-    return get_properties_from_uri(uri)['container_name']
+def get_container_name_from_uri(uri, hutil):
+    return get_properties_from_uri(uri, hutil)['container_name']
 
 
 def get_host_base_from_uri(blob_uri):
@@ -460,7 +449,7 @@ def get_host_base_from_uri(blob_uri):
     return netloc[netloc.find('.'):]
 
 
-def get_properties_from_uri(uri):
+def get_properties_from_uri(uri, hutil):
     path = get_path_from_uri(uri)
     if path.endswith('/'):
         path = path[:-1]
@@ -493,34 +482,25 @@ def create_directory_if_not_exists(directory):
         os.makedirs(directory)
 
 
-def parse_args(cmd):
-    cmd = filter(lambda x : x in string.printable, cmd)
-    cmd = cmd.decode("ascii", "ignore")
-    args = shlex.split(cmd)
-    # From python 2.6 to python 2.7.2, shlex.split output UCS-4 result like
-    # '\x00\x00a'. Temp workaround is to replace \x00
-    for idx, val in enumerate(args):
-        if '\x00' in args[idx]:
-            args[idx] = args[idx].replace('\x00', '')
-    return args
+def get_command_to_execute(hutil):
+    public_settings = hutil.get_public_settings()
+    protected_settings = hutil.get_protected_settings()
+    cmd_public = public_settings.get('commandToExecute')
+    cmd_protected = None
+    if protected_settings is not None:
+        cmd_protected = protected_settings.get('commandToExecute')
+    if cmd_public and cmd_protected:
+        err_msg = ("commandToExecute was specified both in public settings "
+            "and protected settings. It can only be specified in one of them.")
+        hutil.error(err_msg)
+        hutil.do_exit(1, 'Enable','failed','0',
+            'Enable failed: {0}'.format(err_msg))
 
-
-def tail(log_file, output_size = OutputSize):
-    pos = min(output_size, os.path.getsize(log_file))
-    with open(log_file, "r") as log:
-        log.seek(-pos, 2)
-        buf = log.read(output_size)
-        buf = filter(lambda x: x in string.printable, buf)
-        return buf.decode("ascii", "ignore")
-
-
-def get_formatted_log(summary, stdout, stderr):
-    msg_format = ("{0}\n"
-                  "---stdout---\n"
-                  "{1}\n"
-                  "---errout---\n"
-                  "{2}\n")
-    return msg_format.format(summary, stdout, stderr)
+    if cmd_public:
+        hutil.log("Command to execute:" + cmd_public)
+        return cmd_public
+    else:
+        return cmd_protected
 
 
 if __name__ == '__main__' :

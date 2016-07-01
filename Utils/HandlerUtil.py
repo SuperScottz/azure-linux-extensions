@@ -1,4 +1,4 @@
-#
+﻿#
 # Handler library for Linux IaaS
 #
 # Copyright 2014 Microsoft Corporation
@@ -14,8 +14,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# Requires Python 2.7+
 
 
 """
@@ -61,13 +59,15 @@ import imp
 import base64
 import json
 import time
+
+from xml.etree import ElementTree
 from os.path import join
 from Utils.WAAgentUtil import waagent
 from waagent import LoggerInit
-import logging
-import logging.handlers
 
 DateTimeFormat = "%Y-%m-%dT%H:%M:%SZ"
+
+MANIFEST_XML = "manifest.xml"
 
 class HandlerContext:
     def __init__(self,name):
@@ -76,19 +76,42 @@ class HandlerContext:
         return
 
 class HandlerUtility:
-    def __init__(self, log, error, short_name):
+    def __init__(self, log, error, s_name=None, l_name=None, extension_version=None):
         self._log = log
         self._error = error
-        self._short_name = short_name
-        self.syslogger = logging.getLogger(self._short_name)
-        self.syslogger.setLevel(logging.INFO)
-        handler = logging.handlers.SysLogHandler(address='/dev/log')
-        formatter = logging.Formatter('%(name)s: %(levelname)s %(message)s')
-        handler.setFormatter(formatter)
-        self.syslogger.addHandler(handler)
 
+        if s_name is None or l_name is None or extension_version is None:
+            (l_name, s_name, extension_version) = self._get_extension_info()
+
+        self._short_name = s_name
+        self._extension_version = extension_version
+        self._log_prefix = '[%s-%s] ' % (l_name, extension_version)
+
+    def get_extension_version(self):
+        return self._extension_version
+    
     def _get_log_prefix(self):
-        return '[%s-%s]' %(self._context._name, self._context._version)
+        return self._log_prefix
+
+    def _get_extension_info(self):
+        if os.path.isfile(MANIFEST_XML):
+            return self._get_extension_info_manifest()
+
+        ext_dir = os.path.basename(os.getcwd())
+        (long_name, version) = ext_dir.split('-')
+        short_name = long_name.split('.')[-1]
+
+        return long_name, short_name, version
+
+    def _get_extension_info_manifest(self):
+        with open(MANIFEST_XML) as fh:
+            doc = ElementTree.parse(fh)
+            namespace = doc.find('{http://schemas.microsoft.com/windowsazure}ProviderNameSpace').text
+            short_name = doc.find('{http://schemas.microsoft.com/windowsazure}Type').text
+            version = doc.find('{http://schemas.microsoft.com/windowsazure}Version').text
+
+            long_name = "%s.%s" % (namespace, short_name)
+            return (long_name, short_name, version)
 
     def _get_current_seq_no(self, config_folder):
         seq_no = -1
@@ -115,23 +138,6 @@ class HandlerUtility:
 
     def error(self, message):
         self._error(self._get_log_prefix() + message)
-
-    def syslog(self, level, message):
-        if level == logging.INFO:
-            self.syslogger.info(message)
-        elif level == logging.WARNING:
-            self.syslogger.warning(message)
-        elif level == logging.ERROR:
-            self.syslogger.error(message)
-
-    def log_and_syslog(self, level, message):
-        self.syslog(level, message)
-        if level == logging.INFO:
-            self.log(message)
-        elif level == logging.WARNING:
-            self.log(" ".join(["Warning:", message]))
-        elif level == logging.ERROR:
-            self.error(message)
 
     def _parse_config(self, ctxt):
         config = None
@@ -186,7 +192,7 @@ class HandlerUtility:
         if not os.path.isfile(handler_env_file):
             self.error("Unable to locate " + handler_env_file)
             return None
-        ctxt=waagent.GetFileContents(handler_env_file)
+        ctxt = waagent.GetFileContents(handler_env_file)
         if ctxt == None :
             self.error("Unable to read " + handler_env_file)
         try:
@@ -297,8 +303,10 @@ class HandlerUtility:
         }]
         stat_rept = json.dumps(stat)
         if self._context._status_file:
-            with open(self._context._status_file,'w+') as f:
+            tmp = "%s.tmp" %(self._context._status_file)
+            with open(tmp,'w+') as f:
                 f.write(stat_rept)
+            os.rename(tmp, self._context._status_file)
 
     def do_heartbeat_report(self, heartbeat_file,status,code,message):
         # heartbeat

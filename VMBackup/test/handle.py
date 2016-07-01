@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 #
 #CustomScript extension
 #
@@ -15,10 +15,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# Requires Python 2.7+
-#
-
 
 import array
 import base64
@@ -33,19 +29,20 @@ import shlex
 import traceback
 import urllib2
 import urlparse
+import datetime
+import math
 
-#Main function is the only entrence to this extension handler
+
 def main():
-        p = subprocess.call(["fsfreeze", "-f", "/"])
-        print(p)
-        #out, err = p.communicate()
-
-        print('ssss')
-
-
-        p = subprocess.call(["fsfreeze", "-u", "/"])
-        print(p)
-        #out, err = p.communicate()
+    ticks = 635798839149570996
+    
+    commandStartTime = datetime.datetime(1, 1, 1) + datetime.timedelta(microseconds = ticks/10)
+    utcNow = datetime.datetime.utcnow()
+    timespan = utcNow-commandStartTime
+    
+    print(str(timespan.total_seconds()))
+    total_span_in_seconds = timespan.days * 24 * 60 * 60 + timespan.seconds
+    print(str(total_span_in_seconds))
 
 if __name__ == '__main__' :
     main()

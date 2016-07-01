@@ -15,10 +15,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# Requires Python 2.7+
-#
-from Utils import HandlerUtil
+
 from common import CommonVariables
 import base64
 import json
@@ -39,19 +36,24 @@ class ParameterParser(object):
         self.commandToExecute = public_settings.get(CommonVariables.command_to_execute)
         self.taskId = public_settings.get(CommonVariables.task_id)
         self.locale = public_settings.get(CommonVariables.locale)
+        self.logsBlobUri = public_settings.get(CommonVariables.logs_blob_uri)
+        self.statusBlobUri = public_settings.get(CommonVariables.status_blob_uri)
+        self.commandStartTimeUTCTicks = public_settings.get(CommonVariables.commandStartTimeUTCTicks)
+
         self.publicObjectStr = public_settings.get(CommonVariables.object_str)
-        if(self.publicObjectStr  is not None and self.publicObjectStr != ""):
+        if(self.publicObjectStr is not None and self.publicObjectStr != ""):
             decoded_public_obj_string = base64.standard_b64decode(self.publicObjectStr)
             decoded_public_obj_string = decoded_public_obj_string.strip()
             decoded_public_obj_string = decoded_public_obj_string.strip('\'')
             self.public_config_obj = json.loads(decoded_public_obj_string)
             self.backup_metadata = self.public_config_obj['backupMetadata']
+        if(self.logsBlobUri is None or self.logsBlobUri == ""):
+            self.logsBlobUri = protected_settings.get(CommonVariables.logs_blob_uri)
         """
         first get the protected configuration
         """
-        self.logsBlobUri = protected_settings.get(CommonVariables.logs_blob_uri)
         self.privateObjectStr = protected_settings.get(CommonVariables.object_str)
-        if(self.privateObjectStr!=None and self.privateObjectStr != ""):
+        if(self.privateObjectStr is not None and self.privateObjectStr != ""):
             decoded_private_obj_string = base64.standard_b64decode(self.privateObjectStr)
             decoded_private_obj_string = decoded_private_obj_string.strip()
             decoded_private_obj_string = decoded_private_obj_string.strip('\'')

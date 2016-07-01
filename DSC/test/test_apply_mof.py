@@ -15,9 +15,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# Requires Python 2.7+
-#
 
 import unittest
 import env
@@ -33,11 +30,11 @@ class Dummy(object):
 
 class TestApplyMof(unittest.TestCase):
     def test_apply_mof(self):
-        dsc.distro_info = platform.dist()
+        dsc.distro_category = dsc.get_distro_category()
         dsc.hutil = Dummy()
         dsc.hutil.log = waagent.Log
         dsc.install_dsc_packages()
-        dsc.start_omiserver()
+        dsc.start_omiservice()
         dsc.apply_dsc_configuration('mof/localhost.nxFile.mof')
         self.assertTrue(os.path.exists('/tmp/dsctest'))
         
