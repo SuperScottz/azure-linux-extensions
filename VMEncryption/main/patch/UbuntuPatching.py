@@ -29,14 +29,17 @@ import time
 import traceback
 import datetime
 import subprocess
+
 from AbstractPatching import AbstractPatching
 from Common import *
+from CommandExecutor import *
 
 
 class UbuntuPatching(AbstractPatching):
-    def __init__(self,logger,distro_info):
-        super(UbuntuPatching,self).__init__(distro_info)
+    def __init__(self, logger, distro_info):
+        super(UbuntuPatching, self).__init__(distro_info)
         self.logger = logger
+        self.command_executor = CommandExecutor(logger)
         self.base64_path = '/usr/bin/base64'
         self.bash_path = '/bin/bash'
         self.blkid_path = '/sbin/blkid'
@@ -52,14 +55,19 @@ class UbuntuPatching(AbstractPatching):
         self.openssl_path = '/usr/bin/openssl'
         self.resize2fs_path = '/sbin/resize2fs'
         self.umount_path = '/bin/umount'
+        self.touch_path = '/usr/bin/touch'
 
     def install_extras(self):
         """
         install the sg_dd because the default dd do not support the sparse write
         """
-        if(self.distro_info[0].lower() == "ubuntu" and self.distro_info[1] == "12.04"):
-            common_extras = ['cryptsetup-bin','lsscsi']
-        else:
-            common_extras = ['cryptsetup-bin','lsscsi']
-        for extra in common_extras:
-            self.logger.log("installation for " + extra + 'result is ' + str(subprocess.call(['apt-get', 'install','-y', extra])))
+        cmd = " ".join(['apt-get', 'update'])
+        self.command_executor.Execute(cmd)
+
+        packages = ['at', 'cryptsetup-bin', 'lsscsi', 'python-six', 'python-parted', 'procps', 'psmisc', 'gcc', 'libssl-dev', 'libffi-dev', 'python-dev', 'python-pip']
+
+        cmd = " ".join(['apt-get', 'install', '-y'] + packages)
+        self.command_executor.Execute(cmd)
+        
+        cmd = " ".join(['pip', 'install', 'adal'])
+        self.command_executor.Execute(cmd)
