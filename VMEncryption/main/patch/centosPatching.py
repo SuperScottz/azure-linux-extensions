@@ -39,7 +39,7 @@ class centosPatching(redhatPatching):
         super(centosPatching, self).__init__(logger, distro_info)
         self.logger = logger
         self.command_executor = CommandExecutor(logger)
-        if distro_info[1] == "6.8" or distro_info[1] == "6.7" or distro_info[1] == "6.6" or distro_info[1] == "6.5":
+        if distro_info[1] in ["6.9", "6.8", "6.7", "6.6", "6.5"]:
             self.base64_path = '/usr/bin/base64'
             self.bash_path = '/bin/bash'
             self.blkid_path = '/sbin/blkid'
@@ -122,6 +122,11 @@ class centosPatching(redhatPatching):
                     'libffi-devel',
                     'openssl-devel',
                     'python-devel']
+
+        if self.distro_info[1].startswith("6."):
+            packages.remove('cryptsetup')
+            packages.remove('procps-ng')
+            packages.remove('util-linux')
 
         if self.command_executor.Execute("rpm -q " + " ".join(packages)):
             self.command_executor.Execute("yum install -y " + " ".join(packages))

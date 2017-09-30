@@ -1,14 +1,15 @@
 [
-  {
-    "version": 1.0,
-    "handlerManifest": {
-      "disableCommand": "main/handle.py -disable",
-      "enableCommand": "main/handle.py -enable",
-      "installCommand": "main/handle.py -install",
-      "uninstallCommand": "main/handle.py -uninstall",
-      "updateCommand": "main/handle.py -update",
-      "rebootAfterInstall": false,
-      "reportHeartbeat": false
+    {
+        "handlerManifest": {
+            "disableCommand": "main/handle.sh disable", 
+            "enableCommand": "main/handle.sh enable", 
+            "installCommand": "main/handle.sh install", 
+            "rebootAfterInstall": false, 
+            "reportHeartbeat": false, 
+            "uninstallCommand": "main/handle.sh uninstall", 
+            "updateCommand": "main/handle.sh update"
+        }, 
+        "name": "MyBackupTestLinuxInt", 
+        "version": "1.0.9119.0"
     }
-  }
 ]
